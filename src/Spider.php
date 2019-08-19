@@ -249,7 +249,7 @@ class Spider
                         $this->decrRequestOverplus(); // 减少剩余请求页面数
 
                         $this->redis->hdel($this->redisKey('retry_count'), $request); // 删除该请求失败重试次数
-                    } else { // 失败次数没超过限制，则重试
+                    } else {
                         $this->redis->lpush($this->redisKey('queue:error'), $request); // 把请求重新重新放入队列
                         $this->redis->hincrby($this->redisKey('retry_count'), $request, 1); // 记录重试次数
 
@@ -261,7 +261,6 @@ class Spider
 
             // 等待爬取完成
             $pool->promise()->wait();
-//            $promise->wait();
         }
 
         // 清除redis信息
