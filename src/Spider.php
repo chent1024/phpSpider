@@ -157,7 +157,7 @@ class Spider
         $takeTime = number_format((microtime(TRUE) - $startRunTime), 6);
         $loginInfo[] = "耗时:" . $takeTime . 's';
         $loginInfo[] = "线程数:" . $this->config['concurrency'];
-        $loginInfo[] = "总页数:" . $this->getRequestTotal();
+        $loginInfo[] = "请求数:" . $this->getRequestTotal();
         $loginInfo[] = "请求成功:" . $this->status['success_count'];
         $loginInfo[] = "请求失败:" . $this->status['request_error_pages'];
         $loginInfo[] = "解析失败:" . $this->status['save_error_pages'];
