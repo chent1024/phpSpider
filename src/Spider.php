@@ -70,7 +70,7 @@ class Spider
             'concurrency' => 1, // 并发线程数
             'continue' => 0, // 是否开启续爬
             'timeout' => 10.0,    // 爬取网页超时时间
-            'log_step' => 2, // 每爬取多少页面记录一次日志
+            'log_step' => 10, // 每爬取多少页面记录一次日志
             'base_uri' => '', // 爬取根域名
             'interval' => 0, // 每次爬取间隔时间
             'queue_len' => NULL, // 队列长度，用于记录队列进度日志
