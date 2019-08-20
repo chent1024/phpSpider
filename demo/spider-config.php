@@ -6,7 +6,7 @@ return [
     // 日志配置
     'log' => [
         // 日志文件路径
-        'path' => 'log/xcrawler-'.date('Y-m-d').'.log',
+        'path' => 'log/spider-'.date('Y-m-d').'.log',
     ],
 
     // redis配置

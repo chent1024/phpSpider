@@ -55,8 +55,8 @@ class Utils
     {
         $defConfig = require __DIR__ . '/config.php';
         $config = NULL;
-        if (file_exists(self::rootPath() . '/xcrawler-config.php')) {
-            $config = require self::rootPath() . '/xcrawler-config.php';
+        if (file_exists(self::rootPath() . '/spider-config.php')) {
+            $config = require self::rootPath() . '/spider-config.php';
         }
         $name = explode('.', $name);
 
