@@ -8,4 +8,4 @@ Forked yan68/xcrawler
 
 ## 开源协议 (License)
 
-XCrawler是基于MIT开源协议发布的。
+基于MIT开源协议发布的。
