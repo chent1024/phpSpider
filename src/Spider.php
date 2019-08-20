@@ -73,7 +73,6 @@ class Spider
             'log_step' => 10, // 每爬取多少页面记录一次日志
             'interval' => 0, // 每次爬取间隔时间
             'retry_count' => 2, // 失败重试次数
-            'check_black' => 1, // 是否判断黑名单
             'requests' => function () { // 需要发送的请求
             },
             'success' => function ($result, $request, $spider, $headers) { // 爬取成功的回调函数
