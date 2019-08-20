@@ -71,9 +71,7 @@ class Spider
             'continue' => 0, // 是否开启续爬
             'timeout' => 10.0,    // 爬取网页超时时间
             'log_step' => 10, // 每爬取多少页面记录一次日志
-            'base_uri' => '', // 爬取根域名
             'interval' => 0, // 每次爬取间隔时间
-            'queue_len' => NULL, // 队列长度，用于记录队列进度日志
             'retry_count' => 2, // 失败重试次数
             'check_black' => 1, // 是否判断黑名单
             'requests' => function () { // 需要发送的请求
@@ -180,7 +178,7 @@ class Spider
             'timeout' => $this->config['timeout'],
         ]);
         while ($this->getRequestOverplus()) {
-            // 获取请求闭包函数
+            // 请求闭包函数
             $requests = function () use ($client) {
                 $i = 0;
 
@@ -188,79 +186,82 @@ class Spider
                     $this->hsetRequesting($i, $request);
                     $request = $this->getRealRequest($request);
                     yield function () use ($client, $request) {
-                        $options = $request;
-                        return $client->requestAsync($request['method'], $request['uri'], $options);
+                        return $client->requestAsync($request['method'], $request['uri'], $request);
                     };
 
                     $i++;
                 }
             };
 
-            // 爬取网站数据
-            $pool = new Pool($client, $requests(), [
-                'concurrency' => $this->config['concurrency'],
-                'fulfilled' => function ($response, $index) {
-                    $this->status['success_count']++;
+            // request success
+            $fulfilled = function ($response, $index) {
+                $this->status['success_count']++;
 
-                    $this->decrRequestOverplus();
-                    $this->hdelRequesting($index);
+                $this->decrRequestOverplus();
 
-                    $request = $this->hgetRequesting($index);
-                    $this->redis->hdel($this->redisKey('retry_count'), $request); // 删除该请求失败重试次数
+                $request = $this->hgetRequesting($index);
+                $this->hdelRequesting($index);
 
-                    // 执行请求成功回调函数
-                    $result = $response->getBody()->getContents();
+                // 删除该请求失败重试次数
+                $this->redis->hdel($this->redisKey('retry_count'), $request);
+
+                // 执行请求成功回调函数
+                $result = $response->getBody()->getContents();
+                $request = json_decode($request, true);
+                try {
+                    // 执行成功回调
+                    $this->config['success']($result, $request, $this, $response->getHeaders());
+                } catch (\Exception $e) {
+                    $errorMsg = $e->getMessage() . ' in ' . $e->getFile() . ' on ' . $e->getLine();
+                    $this->addRequestErrorLog($request, 'fulfilled_exception', $errorMsg);
+
+                    $this->status['save_error_pages']++;
+                }
+
+                $this->addRequestProcessLog();
+
+                // 爬取sleep间隔
+                $this->config['interval'] && sleep($this->config['interval']);
+            };
+
+            // request faild
+            $rejected = function ($reason, $index) {
+                $this->status['request_error_pages']++;
+
+                // 获取请求数据
+                $request = $this->hgetRequesting($index);
+                $this->hdelRequesting($index);
+                $this->addRequestErrorLog($request, 'request_fail', $reason->getMessage());
+
+                $retryCount = $this->redis->hget($this->redisKey('retry_count'), $request);
+                // 失败次数超过限制, 进行错误回调
+                if ($retryCount >= $this->config['retry_count']) {
+                    $result = $reason->getResponse() ? $reason->getResponse()->getBody()->getContents() : null;
                     $request = json_decode($request, true);
-                    try {
-                        $callbackSuccess = $this->config['success']($result, $request, $this, $response->getHeaders());
+                    $this->config['error']($request, $reason->getMessage(), $result); // 执行失败回调
 
-                        // 错误日志
-                        if (isset($callbackSuccess['status']) && $callbackSuccess['status'] <= 0) {
-                            sort($callbackSuccess['error_resaons']);
-                            $this->addRequestErrorLog($request, 'save_validate', $callbackSuccess['error_resaons']);
-                        }
-                    } catch (\Exception $e) {
-                        $errorMsg = $e->getMessage() . ' in ' . $e->getFile() . ' on ' . $e->getLine();
-                        $this->addRequestErrorLog($request, 'crawler_exception', $errorMsg);
-                        $this->status['save_error_pages']++;
-                    }
-
-                    $this->addRequestProcessLog();
+                    $this->addRequestErrorLog($request, 'request_fail', $reason->getMessage());
+                    $this->decrRequestOverplus(); // 减少剩余请求页面数
+                    $this->redis->hdel($this->redisKey('retry_count'), json_encode($request)); // 删除该请求失败重试次数
+                } else {
+                    // 添加request到重试队列
+                    $this->lpushErrorRequest($request);
+                    $this->redis->hincrby($this->redisKey('retry_count'), $request, 1); // 记录重试次数
 
                     // 爬取sleep间隔
                     $this->config['interval'] && sleep($this->config['interval']);
-                },
-                'rejected' => function ($reason, $index) {
-                    $this->hdelRequesting($index);
-                    $this->status['request_error_pages']++;
+                }
+            };
 
-                    // 获取请求数据
-                    $request = $this->hgetRequesting($index);
-                    $this->addRequestErrorLog($request, 'request_fail', $reason->getMessage());
-
-                    // 判断失败次数超过限制，则跳过该请求
-                    $retryCount = $this->redis->hget($this->redisKey('retry_count'), $request);
-                    if ($retryCount >= $this->config['retry_count']) {
-                        // 调用爬取失败回调函数
-                        $result = $reason->getResponse() ? $reason->getResponse()->getBody()->getContents() : null;
-                        $this->config['error'](json_decode($request, true), $reason->getMessage(), $result);
-
-                        $this->addRequestErrorLog(json_decode($request, true), 'request_fail', $reason->getMessage());
-                        $this->decrRequestOverplus(); // 减少剩余请求页面数
-
-                        $this->redis->hdel($this->redisKey('retry_count'), $request); // 删除该请求失败重试次数
-                    } else {
-                        $this->redis->lpush($this->redisKey('queue:error'), $request); // 把请求重新重新放入队列
-                        $this->redis->hincrby($this->redisKey('retry_count'), $request, 1); // 记录重试次数
-
-                        // 爬取sleep间隔
-                        $this->config['interval'] && sleep($this->config['interval']);
-                    }
-                },
+            // 爬取网站数据
+            $pool = new Pool($client, $requests(), [
+                'concurrency' => $this->config['concurrency'],
+                'fulfilled' => $fulfilled,
+                'rejected' => $rejected,
             ]);
-
             // 等待爬取完成
-            $pool->promise()->wait();
+            $promise = $pool->promise();
+            $promise->wait();
         }
 
         // 清除redis信息
@@ -313,11 +314,9 @@ class Spider
         // 清除旧的redis数据
         Utils::redisDel($this->redisKey('*'));
 
-        $lastLogProcess = 0;
         foreach ($this->config['requests']() as $key => $val) {
             $request = $this->requestFormat($val);
             if (!$this->checkUri($request['uri'])) {
-                $this->log->info($request['uri'] . '不合法, 已跳过');
                 continue;
             }
 
@@ -325,15 +324,6 @@ class Spider
             // 利用sets数据结构来避免添加重复请求到队列
             if ($this->redis->sadd($this->redisKey('sets'), $request)) {
                 $this->lpushRequest($request);
-            }
-
-            // 记录队列进度日志
-            if ($this->config['queue_len']) {
-                $curProcess = round(($key + 1) / $this->config['queue_len'], 2) * 100;
-                if ($curProcess - $lastLogProcess >= 5) {
-                    $this->log->info('初始化队列:' . $curProcess . '%, 队列长度:' . $this->getRequestLength());
-                    $lastLogProcess = $curProcess;
-                }
             }
         }
         // 清除sets数据
@@ -374,6 +364,7 @@ class Spider
     {
         $checkUri = (strstr($uri, 'http:') || strstr($uri, 'https:')) ? $uri : 'http:' . $uri;
         if (!filter_var($checkUri, FILTER_VALIDATE_URL)) {
+            $this->log->info($uri . '不合法, 已跳过');
             return false;
         }
 
@@ -407,21 +398,20 @@ class Spider
 
     /**
      * 获取格式化后的请求
+     *
      * @param string|array $request 请求内容
      * @return array 格式化后的请求
      */
     protected function requestFormat($request)
     {
-        // 如果请求内容为字符串/数字，则把字符串/数字当作url转为get数组请求。
-        if (is_string($request) || is_numeric($request)) {
+        if (is_string($request)) {
             return [
                 'method' => 'get',
-                'uri' => $this->config['base_uri'] . $request,
+                'uri' => $request,
             ];
         }
 
         if (is_array($request)) {
-            $request['uri'] = $this->config['base_uri'] . $request['uri'];
             if (empty($request['method'])) {
                 $request['method'] = 'get';
             }
@@ -525,7 +515,7 @@ class Spider
      */
     protected function rpushRequest($request)
     {
-        return $this->redis->rpush($this->redisKey('queue'), $request);
+        return $this->redis->rpush($this->redisKey('requests'), $request);
     }
 
     /**
@@ -536,7 +526,7 @@ class Spider
      */
     protected function lpushRequest($request)
     {
-        return $this->redis->lpush($this->redisKey('queue'), $request);
+        return $this->redis->lpush($this->redisKey('requests'), $request);
     }
 
     /**
@@ -546,7 +536,7 @@ class Spider
      */
     protected function rpopRequest()
     {
-        return $this->redis->rpop($this->redisKey('queue'));
+        return $this->redis->rpop($this->redisKey('requests'));
     }
 
     /**
@@ -556,7 +546,18 @@ class Spider
      */
     protected function rpopErrorRequest()
     {
-        return $this->redis->rpop($this->redisKey('queue:error'));
+        return $this->redis->rpop($this->redisKey('requests:error'));
+    }
+
+    /**
+     * 失败请求添加到redis
+     *
+     * @param $request
+     * @return int
+     */
+    protected function lpushErrorRequest($request)
+    {
+        return $this->redis->lpush($this->redisKey('requests:error'), $request);
     }
 
     /**
@@ -566,7 +567,7 @@ class Spider
      */
     public function getRequestLength()
     {
-        return $this->redis->llen($this->redisKey('queue'));
+        return $this->redis->llen($this->redisKey('requests'));
     }
 
     /**
